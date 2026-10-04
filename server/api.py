@@ -5,13 +5,15 @@
 """
 import io
 import json
+import threading
+from collections import OrderedDict
 
 from flask import Blueprint, jsonify, request, send_file
 from PIL import Image, ImageChops
 
 from . import config, pipeline as pipeline_engine
 from .algorithms import detection, features, segmentation, style, util
-from .batch import BatchManager, process_image
+from .batch import BatchManager, load_working_image, process_image
 from .cache import ResultCache, make_key
 from .history import HistoryManager
 from .image_store import ImageStore
@@ -315,6 +317,76 @@ def delete_pipeline(pid):
         return doc
     pipelines_store.update(_upd)
     return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# 调优预览（只算不落盘：不写历史、不进正式结果列表）
+# ---------------------------------------------------------------------------
+class _PreviewCache:
+    """调优预览的进程内缓存：流水线指纹 -> PNG 字节。
+
+    预览是编辑期的临时动作，结果只用于即时展示——不落盘、不写历史、
+    不进正式结果缓存；小规模 LRU 只为滑杆来回拖动时免去重复计算，
+    进程退出即失效。
+    """
+
+    def __init__(self, capacity=16):
+        self.capacity = capacity
+        self._items = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            data = self._items.get(key)
+            if data is not None:
+                self._items.move_to_end(key)
+            return data
+
+    def put(self, key, data):
+        with self._lock:
+            self._items[key] = data
+            self._items.move_to_end(key)
+            while len(self._items) > self.capacity:
+                self._items.popitem(last=False)
+
+
+preview_cache = _PreviewCache()
+
+
+@bp.post("/preview")
+def run_preview():
+    """调优预览：执行流水线后直接把 PNG 返回给前端即时展示。
+
+    与 /api/run（正式运行）的区别：不写处理历史，结果也不进正式结果
+    缓存（/api/results 中不出现），只用进程内 LRU 暂存最近几次预览。
+    """
+    data = request.get_json(silent=True) or {}
+    image_id = data.get("image_id")
+    nodes = data.get("nodes")
+    if image_id is None or nodes is None:
+        return jsonify({"error": "缺少 image_id 或 nodes"}), 400
+
+    try:
+        _, work, rec = load_working_image(image_store, image_id)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"载入图像失败: {exc}"}), 404
+
+    key = make_key("preview", rec["hash"], pipeline_engine.canonical_key(nodes))
+    png = preview_cache.get(key)
+    cache_hit = png is not None
+    if not cache_hit:
+        exec_result = pipeline_engine.execute(work, nodes)
+        if exec_result.get("error"):
+            return jsonify({"error": exec_result["error"]}), 400
+        buf = io.BytesIO()
+        util.ensure_rgb(exec_result["image"]).save(buf, "PNG")
+        png = buf.getvalue()
+        preview_cache.put(key, png)
+
+    resp = send_file(io.BytesIO(png), mimetype="image/png")
+    resp.headers["X-Cache-Hit"] = "1" if cache_hit else "0"
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 # ---------------------------------------------------------------------------

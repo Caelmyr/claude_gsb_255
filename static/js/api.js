@@ -17,12 +17,30 @@ window.Api = (function () {
     }
     return data;
   }
+  /* POST JSON，期望二进制（图片）响应；错误时按 JSON 解析 error 并抛出。 */
+  async function postBlob(url, body) {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      let msg = "HTTP " + resp.status;
+      try {
+        const d = await resp.json();
+        if (d && d.error) msg = d.error;
+      } catch (e) { /* 非 JSON 错误体 */ }
+      throw new Error(msg);
+    }
+    return { blob: await resp.blob(), headers: resp.headers };
+  }
   return {
     get: (u) => request("GET", u),
     post: (u, b) => request("POST", u, b),
     put: (u, b) => request("PUT", u, b),
     patch: (u, b) => request("PATCH", u, b),
     del: (u) => request("DELETE", u),
+    postBlob,
     upload(files) {
       const fd = new FormData();
       for (const f of files) fd.append("files", f);

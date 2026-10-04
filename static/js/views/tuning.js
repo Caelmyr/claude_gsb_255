@@ -24,7 +24,7 @@ window.Views.tuning = (function () {
             </div>
           </div>
           <div class="col">
-            <div class="panel"><div class="panel-title">实时预览<span class="dim">参数变化自动运行（节流）</span></div>
+            <div class="panel"><div class="panel-title">实时预览<span class="dim">参数变化自动预览（节流）· 不写入历史</span></div>
               <div class="stage" id="tu-preview"><span class="dim">选择图像与算法后显示</span></div></div>
           </div>
         </div>`;
@@ -62,16 +62,25 @@ window.Views.tuning = (function () {
   }
 
   let previewTimer = null;
+  let previewSeq = 0;     // 防乱序：只渲染最后一次请求的响应
+  let previewUrl = null;  // 上一张预览的 object URL，替换时释放
   function runPreview(el, vals) {
     if (!imgId || !nodeType) return;
     clearTimeout(previewTimer);
     previewTimer = setTimeout(async () => {
       const nodes = [{ id: "t1", type: nodeType, params: vals || {}, inputs: [] }];
+      const seq = ++previewSeq;
       try {
-        const r = await Api.post("/api/run", { image_id: imgId, nodes, pipeline_name: "调优预览" });
+        // 预览走专用接口：结果只用于即时展示，不写历史、不进正式结果列表
+        const r = await Api.postBlob("/api/preview", { image_id: imgId, nodes });
+        if (seq !== previewSeq) return;
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        previewUrl = URL.createObjectURL(r.blob);
+        const hit = r.headers.get("X-Cache-Hit") === "1";
         el.querySelector("#tu-preview").innerHTML =
-          `<img src="${r.file_url}?t=${Date.now()}"><div class="caption">${r.cache_hit ? "缓存命中" : "已计算"}</div>`;
+          `<img src="${previewUrl}"><div class="caption">${hit ? "缓存命中" : "已计算"}</div>`;
       } catch (e) {
+        if (seq !== previewSeq) return;
         el.querySelector("#tu-preview").innerHTML = `<div class="empty">${C.esc(e.message)}</div>`;
       }
     }, 350);
