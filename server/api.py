@@ -327,6 +327,8 @@ def run_pipeline():
     nodes = data.get("nodes")
     pipeline_id = data.get("pipeline_id")
     pipeline_name = data.get("pipeline_name")
+    # 调优页的实时预览：只算图即时展示，不写历史、不进正式结果列表
+    preview = bool(data.get("preview"))
 
     if not nodes and pipeline_id:
         p = pipelines_store.read().get(pipeline_id)
@@ -337,7 +339,8 @@ def run_pipeline():
         return jsonify({"error": "缺少 image_id 或 nodes"}), 400
 
     res = process_image(image_store, cache, history, image_id, nodes,
-                        pipeline_id=pipeline_id, pipeline_name=pipeline_name)
+                        pipeline_id=pipeline_id, pipeline_name=pipeline_name,
+                        preview=preview)
     if res["error"]:
         return jsonify({"error": res["error"], "history_id": res["history_id"]}), 200
     entry = cache.get_entry(res["result_id"]) or {}

@@ -33,8 +33,12 @@ def load_working_image(image_store, image_id):
 
 
 def process_image(image_store, cache, history, image_id, nodes,
-                  pipeline_id=None, pipeline_name=None):
-    """对单张图执行流水线（带缓存），并记录历史。
+                  pipeline_id=None, pipeline_name=None, preview=False):
+    """对单张图执行流水线（带缓存）；正式运行记录历史，预览只算不落地。
+
+    preview=True 用于调优页的实时预览：结果照常进缓存（来回拖参数能即时命中），
+    但不写历史、不进正式结果列表；之后若正式运行同一组合，命中的预览缓存
+    会被 promote 转正，无需重算。
 
     返回 {result_id, cache_hit, error, exec_result, history_id}。
     """
@@ -48,25 +52,35 @@ def process_image(image_store, cache, history, image_id, nodes,
     key = make_key(rec["hash"], pipeline_engine.canonical_key(nodes))
     cached = cache.get(key)
     if cached:
-        entry = _record_history(history, image_store, image_id, nodes, pipeline_id,
-                                pipeline_name, cached, True, None, None, t0)
+        history_id = None
+        if not preview:
+            cache.promote(key)
+            entry = _record_history(history, image_store, image_id, nodes, pipeline_id,
+                                    pipeline_name, cached, True, None, None, t0)
+            history_id = entry["id"]
         return {"result_id": cached, "cache_hit": True, "error": None,
-                "exec_result": None, "history_id": entry["id"]}
+                "exec_result": None, "history_id": history_id}
 
     exec_result = pipeline_engine.execute(work, nodes)
     if exec_result.get("error"):
-        entry = _record_history(history, image_store, image_id, nodes, pipeline_id,
-                                pipeline_name, None, False, exec_result["error"],
-                                exec_result.get("node_results"), t0)
+        history_id = None
+        if not preview:
+            entry = _record_history(history, image_store, image_id, nodes, pipeline_id,
+                                    pipeline_name, None, False, exec_result["error"],
+                                    exec_result.get("node_results"), t0)
+            history_id = entry["id"]
         return {"result_id": None, "cache_hit": False, "error": exec_result["error"],
-                "exec_result": exec_result, "history_id": entry["id"]}
+                "exec_result": exec_result, "history_id": history_id}
 
-    result_id = cache.put(key, exec_result["image"], exec_result["meta"])
-    entry = _record_history(history, image_store, image_id, nodes, pipeline_id,
-                            pipeline_name, result_id, False, None,
-                            exec_result.get("node_results"), t0)
+    result_id = cache.put(key, exec_result["image"], exec_result["meta"], preview=preview)
+    history_id = None
+    if not preview:
+        entry = _record_history(history, image_store, image_id, nodes, pipeline_id,
+                                pipeline_name, result_id, False, None,
+                                exec_result.get("node_results"), t0)
+        history_id = entry["id"]
     return {"result_id": result_id, "cache_hit": False, "error": None,
-            "exec_result": exec_result, "history_id": entry["id"]}
+            "exec_result": exec_result, "history_id": history_id}
 
 
 def _record_history(history, image_store, image_id, nodes, pipeline_id, pipeline_name,

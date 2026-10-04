@@ -77,15 +77,24 @@ class ResultCache:
         except Exception:
             return None
 
-    def list_results(self):
-        """按创建时间倒序返回结果条目列表。"""
-        entries = list(self.store.read().values())
+    def list_results(self, include_preview=False):
+        """按创建时间倒序返回结果条目列表。
+
+        默认排除调优预览产生的临时结果（preview 条目只供即时展示，
+        不进正式结果列表）；include_preview=True 时全部返回。
+        """
+        entries = [e for e in self.store.read().values()
+                   if include_preview or not e.get("preview")]
         entries.sort(key=lambda e: e.get("created_at", ""), reverse=True)
         return entries
 
     # ------------------------------------------------------------------ 写
-    def put(self, key, image, meta=None):
-        """保存结果图并登记缓存，返回 result_id。"""
+    def put(self, key, image, meta=None, preview=False):
+        """保存结果图并登记缓存，返回 result_id。
+
+        preview=True 时条目标记为预览产物：可被缓存命中复用，但不出现在
+        正式结果列表；之后正式运行同一组合时由 promote() 转正。
+        """
         result_id = uuid.uuid4().hex
         file_name = result_id + ".png"
         dest = os.path.join(config.RESULTS_DIR, file_name)
@@ -104,6 +113,7 @@ class ResultCache:
             "width": rgb.size[0],
             "height": rgb.size[1],
             "meta": meta or {},
+            "preview": bool(preview),
             "created_at": now_iso(),
             "last_access": time.time(),
         }
@@ -116,6 +126,18 @@ class ResultCache:
         self.store.update(_upd)
         self.evict_if_needed()
         return result_id
+
+    def promote(self, key):
+        """把预览产物转正为正式结果（正式运行命中预览缓存时调用）。"""
+        def _upd(doc):
+            doc = dict(doc)
+            e = doc.get(key)
+            if e and e.get("preview"):
+                e = dict(e)
+                e["preview"] = False
+                doc[key] = e
+            return doc
+        self.store.update(_upd)
 
     # ------------------------------------------------------------------ 淘汰
     def evict_if_needed(self):

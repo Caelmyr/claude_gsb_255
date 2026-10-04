@@ -97,6 +97,32 @@ def main():
     print(f"  再次: result={res2['result_id'][:12]}.. cache_hit={res2['cache_hit']} (应命中缓存)")
     print(f"  历史条数: {len(history.list())}")
 
+    print("\n== 调优预览（不写历史 / 不进正式结果列表）==")
+    preview_nodes = [
+        {"id": "t1", "type": "brightness", "params": {"amount": 40}, "inputs": []},
+    ]
+    hist_before = len(history.list())
+    results_before = len(cache.list_results())
+    p1 = process_image(image_store, cache, history, ids["gradient.png"], preview_nodes,
+                       pipeline_name="调优预览", preview=True)
+    p2 = process_image(image_store, cache, history, ids["gradient.png"], preview_nodes,
+                       pipeline_name="调优预览", preview=True)
+    assert p1["result_id"] and p1["history_id"] is None, "预览不应产生 history_id"
+    assert p2["cache_hit"], "同一预览组合再次预览应命中缓存"
+    assert len(history.list()) == hist_before, "预览不应写历史"
+    assert len(cache.list_results()) == results_before, "预览不应进正式结果列表"
+    assert len(cache.list_results(include_preview=True)) > results_before, "预览结果应在缓存中"
+    print(f"  预览: result={p1['result_id'][:12]}.. history_id={p1['history_id']} (应为 None)")
+    print(f"  再次预览: cache_hit={p2['cache_hit']} (应命中缓存)")
+    print(f"  历史条数: {len(history.list())}（未变）  正式结果数: {len(cache.list_results())}（未变）")
+    # 正式运行同一组合：命中预览缓存并转正，写历史、进结果列表
+    f1 = process_image(image_store, cache, history, ids["gradient.png"], preview_nodes,
+                       pipeline_name="正式运行")
+    assert f1["cache_hit"] and f1["history_id"], "正式运行应命中预览缓存并写历史"
+    assert f1["result_id"] == p1["result_id"], "转正应复用预览结果，不重算"
+    assert len(cache.list_results()) == results_before + 1, "转正后应进正式结果列表"
+    print(f"  正式运行同组合: cache_hit={f1['cache_hit']} 复用预览结果并转正，历史 +1、结果列表 +1")
+
     print("\n== 特征提取 ==")
     r = features.extract_keypoints(work, {"method": "sift", "max_points": 80})
     print(f"  SIFT 关键点: {r['count']}  描述子维度={r['descriptor_dim']}")

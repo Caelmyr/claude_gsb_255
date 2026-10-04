@@ -68,7 +68,8 @@ window.Views.tuning = (function () {
     previewTimer = setTimeout(async () => {
       const nodes = [{ id: "t1", type: nodeType, params: vals || {}, inputs: [] }];
       try {
-        const r = await Api.post("/api/run", { image_id: imgId, nodes, pipeline_name: "调优预览" });
+        // preview: 仅即时展示，不写历史、不进正式结果列表
+        const r = await Api.post("/api/run", { image_id: imgId, nodes, pipeline_name: "调优预览", preview: true });
         el.querySelector("#tu-preview").innerHTML =
           `<img src="${r.file_url}?t=${Date.now()}"><div class="caption">${r.cache_hit ? "缓存命中" : "已计算"}</div>`;
       } catch (e) {
